@@ -1,18 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactPlayer from 'react-player';
 import {
-  Mic,
-  MicOff,
-  ArrowLeft,
-  Search,
-  Play,
-  X,
-  Settings,
-  Users,
-  Volume2,
-  Globe,
-  Sparkles,
-  Lock
+  Mic, MicOff, ArrowLeft, Search, Play, X, Settings, Users, Volume2, Globe, Sparkles, Lock
 } from 'lucide-react';
 import { socket } from '../services/socket';
 
@@ -24,7 +13,6 @@ const PLATFORMS = [
 ];
 
 export default function RoomView({ room, username, onBack }) {
-  // --- STATE TANIMLARI ---
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [videoUrl, setVideoUrl] = useState(room.video?.url || '');
@@ -33,27 +21,25 @@ export default function RoomView({ room, username, onBack }) {
   const [currentRoom, setCurrentRoom] = useState(room);
   const [isCinemaMode, setIsCinemaMode] = useState(true);
 
-  // UI Modalları
+  // UI States
   const [showUserList, setShowUserList] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showPlatformModal, setShowPlatformModal] = useState(false);
   const [activeSearchPlatform, setActiveSearchPlatform] = useState(null);
-
-  // Arama
+  
+  // Search
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
-  
-  // Mikrofon (Sadece Görsel)
   const [isMicVisualOn, setIsMicVisualOn] = useState(false);
 
-  // Safari/Mobil Senkronizasyon için bekleyen seek işlemi
+  // Player Sync
   const [pendingSeek, setPendingSeek] = useState(null);
+  const [isPlayerReady, setIsPlayerReady] = useState(false);
 
   const chatEndRef = useRef(null);
   const playerRef = useRef(null);
 
-  // --- YARDIMCI FONKSİYONLAR ---
   const isDirectVideoFile = (url) => {
     if (!url) return false;
     const extension = url.split('.').pop().split('?')[0].toLowerCase();
@@ -72,7 +58,6 @@ export default function RoomView({ room, username, onBack }) {
 
   const isHost = currentRoom?.hostId === socket.id;
 
-  // --- SOCKET LISTENERS ---
   useEffect(() => {
     socket.emit('join_room', {
       roomId: room.id,
@@ -84,12 +69,13 @@ export default function RoomView({ room, username, onBack }) {
     socket.on('room_data', (updatedRoom) => setCurrentRoom(updatedRoom));
 
     socket.on('sync_video', (data) => {
-      // 1. URL Güncelleme
+      // 1. URL Değişimi
       if (data.url && data.url !== videoUrl) {
         setVideoUrl(data.url);
+        setIsPlayerReady(false); // Yeni video geldi, player reset
       }
 
-      // 2. Platform Güncelleme
+      // 2. Platform/Thumbnail
       if (data.platform) {
         setCurrentRoom((prev) => ({
           ...prev,
@@ -104,20 +90,24 @@ export default function RoomView({ room, username, onBack }) {
       // 3. Oynatma Durumu
       setIsPlaying(data.isPlaying);
 
-      // 4. Zaman Senkronizasyonu (Sadece ReactPlayer için)
+      // 4. Zaman Senkronizasyonu
       const targetTime = typeof data.time === 'number' ? data.time : 0;
       
-      if (shouldUseReactPlayer) {
-        if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-          const current = playerRef.current.getCurrentTime();
-          // Eğer player hazırsa ve fark büyükse atla
-          if (Number.isFinite(current) && Math.abs(current - targetTime) > 1) {
-            playerRef.current.seekTo(targetTime, 'seconds');
-          }
-        } else {
-          // Player henüz hazır değilse, hazır olunca atlaması için kaydet
-          setPendingSeek(targetTime);
+      // Sadece ReactPlayer kullanıyorsak detaylı sync yapıyoruz
+      if (playerRef.current) {
+        const current = playerRef.current.getCurrentTime();
+        
+        // Load, Seek veya Resync (Safari dönüşü) ise kesin atla
+        if (data.action === 'load' || data.action === 'seek' || data.action === 'resync') {
+           playerRef.current.seekTo(targetTime, 'seconds');
+        } 
+        // Normal akışta kayma varsa düzelt (0.5 saniyeden fazla fark varsa)
+        else if (Math.isFinite(current) && Math.abs(current - targetTime) > 0.5) {
+           playerRef.current.seekTo(targetTime, 'seconds');
         }
+      } else {
+        // Player henüz render olmadıysa (ilk giriş), zamanı sakla, onReady'de kullan
+        setPendingSeek(targetTime);
       }
     });
 
@@ -136,14 +126,14 @@ export default function RoomView({ room, username, onBack }) {
       socket.off('receive_message');
       socket.off('search_results');
     };
-  }, [username, room.id, videoUrl, shouldUseReactPlayer]);
+  }, [username, room.id, videoUrl]);
 
-  // Chat Scroll
+  // Mesaj gelince scroll
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // --- HOST ZAMAN GÜNCELLEMESİ ---
+  // Host: Periyodik Zaman Gönderimi
   useEffect(() => {
     if (!shouldUseReactPlayer || !isPlaying || !isHost || !playerRef.current) return;
 
@@ -157,23 +147,27 @@ export default function RoomView({ room, username, onBack }) {
           url: videoUrl
         });
       }
-    }, 2000); // Her 2 saniyede bir senkronize et
+    }, 1000);
 
     return () => clearInterval(interval);
   }, [isPlaying, isHost, shouldUseReactPlayer, videoUrl, room.id]);
 
-  // --- SAFARI / MOBİL BACKGROUND FIX ---
+  // SAFARI & MOBİL İÇİN ARKA PLAN DÖNÜŞÜ (Resync)
   useEffect(() => {
-    const handleVisible = () => {
+    const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
+        // Tarayıcı sekmeye dönünce sunucudan "ben neredeyim?" diye sor
         socket.emit('resync_video', { roomId: room.id });
       }
     };
-    document.addEventListener('visibilitychange', handleVisible);
-    return () => document.removeEventListener('visibilitychange', handleVisible);
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [room.id]);
 
-  // --- HANDLERS ---
+  // --- Handlers ---
   const handlePlatformClick = (p) => {
     if (p.status === 'soon') return;
     if (!isHost) return;
@@ -184,11 +178,9 @@ export default function RoomView({ room, username, onBack }) {
 
   const handleSearch = () => {
     if (!searchQuery.trim()) return;
-
     if (activeSearchPlatform === 'Web') {
       let url = searchQuery;
       if (!url.startsWith('http')) url = `https://${url}`;
-      // Video dosyası mı yoksa site mi kontrol et
       const isVideo = isDirectVideoFile(url);
       selectVideo({ url, title: 'Web', platform: isVideo ? 'RawVideo' : 'Web' });
     } else {
@@ -199,7 +191,6 @@ export default function RoomView({ room, username, onBack }) {
 
   const selectVideo = (vid) => {
     if (!isHost) return;
-
     socket.emit('video_change', {
       roomId: room.id,
       action: 'load',
@@ -209,7 +200,6 @@ export default function RoomView({ room, username, onBack }) {
       platform: vid.platform || 'YouTube',
       time: 0
     });
-
     setSearchResults([]);
     setSearchQuery('');
     setActiveSearchPlatform(null);
@@ -232,24 +222,23 @@ export default function RoomView({ room, username, onBack }) {
   const handlePlay = () => {
     if (!isHost) return;
     setIsPlaying(true);
-    socket.emit('video_change', { roomId: room.id, action: 'play', time: playerRef.current?.getCurrentTime() || 0, url: videoUrl });
+    socket.emit('video_change', { roomId: room.id, action: 'play', time: playerRef.current?.getCurrentTime() || 0 });
   };
 
   const handlePause = () => {
     if (!isHost) return;
     setIsPlaying(false);
-    socket.emit('video_change', { roomId: room.id, action: 'pause', time: playerRef.current?.getCurrentTime() || 0, url: videoUrl });
+    socket.emit('video_change', { roomId: room.id, action: 'pause', time: playerRef.current?.getCurrentTime() || 0 });
   };
 
-  const handleSeek = (seconds) => {
+  const handleSeek = (newTime) => {
     if (!isHost) return;
-    socket.emit('video_change', { roomId: room.id, action: 'seek', time: seconds, url: videoUrl });
+    socket.emit('video_change', { roomId: room.id, action: 'seek', time: newTime });
   };
 
   return (
     <div className="flex flex-col h-[100dvh] bg-slate-950 relative overflow-hidden">
-      
-      {/* SİNEMA MODU (AMBILIGHT) */}
+      {/* Arka Plan Bulanıklığı (Cinema Mode) */}
       {isCinemaMode && currentRoom.video?.thumbnail && (
         <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
           <div
@@ -260,23 +249,19 @@ export default function RoomView({ room, username, onBack }) {
         </div>
       )}
 
-      {/* HEADER */}
+      {/* Header */}
       <div className="shrink-0 z-30 bg-gradient-to-b from-black/80 to-transparent pb-2 pt-4 px-4 flex items-center justify-between h-16 relative">
         <button onClick={onBack} className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white">
           <ArrowLeft size={20} />
         </button>
-
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 text-center">
           <h1 className="text-3xl font-black text-white">VORTEX</h1>
         </div>
-
         <div className="flex gap-2 z-20">
           <button
             onClick={() => isHost && setShowPlatformModal(true)}
             disabled={!isHost}
-            className={`p-2 bg-white/10 backdrop-blur-md rounded-full text-white transition ${
-              !isHost ? 'opacity-40 cursor-not-allowed' : 'hover:bg-white/20'
-            }`}
+            className={`p-2 bg-white/10 backdrop-blur-md rounded-full text-white transition ${!isHost ? 'opacity-40 cursor-not-allowed' : 'hover:bg-white/20'}`}
           >
             <Search size={20} />
           </button>
@@ -292,34 +277,36 @@ export default function RoomView({ room, username, onBack }) {
         </div>
       </div>
 
-      {/* PLAYER ALANI */}
-      <div className="w-full aspect-video bg-black relative shrink-0 z-10 border-b border-white/5">
+      {/* VIDEO ALANI - Siyah Ekran ve Z-Index ayarları önemli */}
+      <div className="w-full aspect-video bg-black relative shrink-0 z-10 border-b border-white/5 overflow-hidden shadow-2xl">
         {shouldUseReactPlayer ? (
           videoUrl ? (
             <ReactPlayer
-              key={videoUrl} // URL değişince player'ı resetle (Siyah ekran fix)
+              key={videoUrl} // URL değişince player'ı tamamen yeniden oluştur (Siyah ekran fix)
               ref={playerRef}
               url={videoUrl}
               width="100%"
               height="100%"
               playing={isPlaying}
-              controls={isHost}
+              controls={isHost} // Sadece host kontrolleri görsün
               onPlay={isHost ? handlePlay : undefined}
               onPause={isHost ? handlePause : undefined}
               onSeek={isHost ? handleSeek : undefined}
-              // Player hazır olduğunda bekleyen seek işlemini yap (Safari fix)
               onReady={() => {
-                if (pendingSeek !== null && playerRef.current) {
+                setIsPlayerReady(true);
+                // Eğer bekleyen bir seek varsa (ilk giriş veya load) yap
+                if (pendingSeek != null && playerRef.current) {
                   playerRef.current.seekTo(pendingSeek, 'seconds');
                   setPendingSeek(null);
                 }
               }}
+              onError={(e) => console.log('Player Error:', e)}
               volume={Math.max(0, 1 - volumeBalance)}
               style={{ backgroundColor: '#000' }}
               config={{
                 youtube: {
                   playerVars: {
-                    playsinline: 1,
+                    playsinline: 1, // Mobil Safari için kritik
                     showinfo: 0,
                     rel: 0,
                     modestbranding: 1,
@@ -333,7 +320,7 @@ export default function RoomView({ room, username, onBack }) {
             />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center text-slate-600">
-              <Play size={48} className="text-slate-800 mb-2" />
+              <Play size={48} className="text-slate-800 mb-2 opacity-50" />
             </div>
           )
         ) : videoUrl ? (
@@ -345,56 +332,33 @@ export default function RoomView({ room, username, onBack }) {
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-slate-600">
-            <Globe size={48} className="text-slate-800 mb-2" />
+            <Globe size={48} className="text-slate-800 mb-2 opacity-50" />
           </div>
         )}
       </div>
 
-      {/* CHAT LISTESİ */}
+      {/* Chat Alanı */}
       <div className="flex-1 relative flex flex-col min-h-0 z-10">
         <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-3 flex flex-col justify-end">
           {messages.map((msg, i) => {
             const isHostMsg = currentRoom?.hostId === msg.senderId;
             return (
-              <div
-                key={i}
-                className={`flex gap-3 ${msg.isMe ? 'flex-row-reverse' : 'flex-row'} items-end`}
-              >
+              <div key={i} className={`flex gap-3 ${msg.isMe ? 'flex-row-reverse' : 'flex-row'} items-end`}>
                 <div className="relative shrink-0 mb-1">
                   <img
                     src={msg.avatar}
-                    className={`w-9 h-9 rounded-full object-cover ${
-                      isHostMsg ? 'ring-2 ring-yellow-500/80' : ''
-                    }`}
+                    className={`w-9 h-9 rounded-full object-cover ${isHostMsg ? 'ring-2 ring-yellow-500/80' : ''}`}
                     alt=""
                   />
                 </div>
-                <div
-                  className={`flex flex-col max-w-[70%] ${
-                    msg.isMe ? 'items-end' : 'items-start'
-                  }`}
-                >
+                <div className={`flex flex-col max-w-[70%] ${msg.isMe ? 'items-end' : 'items-start'}`}>
                   <div className="flex items-center gap-1.5 ml-1 mb-1">
-                    <span
-                      className={`text-[10px] font-bold ${
-                        isHostMsg ? 'text-yellow-500' : 'text-slate-400'
-                      }`}
-                    >
+                    <span className={`text-[10px] font-bold ${isHostMsg ? 'text-yellow-500' : 'text-slate-400'}`}>
                       {msg.user}
                     </span>
-                    {isHostMsg && (
-                      <span className="text-[8px] bg-yellow-500 text-black px-1 rounded font-bold">
-                        ODA SAHİBİ
-                      </span>
-                    )}
+                    {isHostMsg && <span className="text-[8px] bg-yellow-500 text-black px-1 rounded font-bold">HOST</span>}
                   </div>
-                  <div
-                    className={`px-4 py-2 text-sm break-words leading-relaxed rounded-2xl ${
-                      msg.isMe
-                        ? 'bg-cyan-600/90 text-white rounded-br-sm'
-                        : 'bg-slate-800/80 text-slate-200 rounded-bl-sm'
-                    }`}
-                  >
+                  <div className={`px-4 py-2 text-sm break-words leading-relaxed rounded-2xl ${msg.isMe ? 'bg-cyan-600/90 text-white rounded-br-sm' : 'bg-slate-800/80 text-slate-200 rounded-bl-sm'}`}>
                     {msg.text}
                   </div>
                 </div>
@@ -405,20 +369,12 @@ export default function RoomView({ room, username, onBack }) {
         </div>
       </div>
 
-      {/* ALT KONTROL BAR */}
+      {/* Input Bar */}
       <div className="shrink-0 bg-slate-900/80 backdrop-blur-xl border-t border-white/5 p-3 flex items-center gap-3 pb-safe-area">
-        <button
-          onClick={() => setIsMicVisualOn(!isMicVisualOn)}
-          className={`p-3 rounded-full ${
-            isMicVisualOn ? 'bg-green-500 text-white' : 'bg-slate-800 text-slate-400'
-          }`}
-        >
+        <button onClick={() => setIsMicVisualOn(!isMicVisualOn)} className={`p-3 rounded-full ${isMicVisualOn ? 'bg-green-500 text-white' : 'bg-slate-800 text-slate-400'}`}>
           {isMicVisualOn ? <Mic size={20} /> : <MicOff size={20} />}
         </button>
-        <form
-          onSubmit={sendMessage}
-          className="flex-1 bg-slate-950/50 rounded-full h-11 flex items-center px-4 border border-white/5"
-        >
+        <form onSubmit={sendMessage} className="flex-1 bg-slate-950/50 rounded-full h-11 flex items-center px-4 border border-white/5">
           <input
             className="bg-transparent outline-none text-white text-sm w-full"
             placeholder="Mesaj yaz..."
@@ -426,7 +382,7 @@ export default function RoomView({ room, username, onBack }) {
             onChange={(e) => setInputText(e.target.value)}
           />
         </form>
-        <button onClick={() => setIsCinemaMode(!isCinemaMode)} className="p-3 text-yellow-400">
+        <button onClick={() => setIsCinemaMode(!isCinemaMode)} className={`p-3 ${isCinemaMode ? 'text-yellow-400' : 'text-slate-500'}`}>
           <Sparkles size={20} />
         </button>
         <button onClick={() => setShowSettings(true)} className="p-3 text-slate-400">
@@ -434,34 +390,19 @@ export default function RoomView({ room, username, onBack }) {
         </button>
       </div>
 
-      {/* PLATFORM SEÇME MODALI (GRID) */}
+      {/* Search Modal */}
       {showPlatformModal && (
         <div className="absolute inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col pt-16 pb-6 px-6 overflow-y-auto">
-          <button
-            onClick={() => {
-              setShowPlatformModal(false);
-              setActiveSearchPlatform(null);
-            }}
-            className="self-end mb-4 text-slate-400"
-          >
+          <button onClick={() => { setShowPlatformModal(false); setActiveSearchPlatform(null); }} className="self-end mb-4 text-slate-400">
             <X size={24} />
           </button>
-
           {!activeSearchPlatform ? (
             <div className="w-full max-w-sm mx-auto">
               <h2 className="text-white text-xl font-bold text-center mb-6">Ne izlemek istersin?</h2>
               <div className="grid grid-cols-2 gap-4">
                 {PLATFORMS.map((p) => (
-                  <div
-                    key={p.name}
-                    onClick={() => handlePlatformClick(p)}
-                    className={`aspect-square bg-slate-800/50 border border-white/10 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-700 ${
-                      p.status === 'soon' ? 'opacity-50' : ''
-                    }`}
-                  >
-                    {p.status === 'soon' && (
-                      <Lock size={16} className="text-yellow-500/50 mb-2" />
-                    )}
+                  <div key={p.name} onClick={() => handlePlatformClick(p)} className={`aspect-square bg-slate-800/50 border border-white/10 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-700 ${p.status === 'soon' ? 'opacity-50' : ''}`}>
+                    {p.status === 'soon' && <Lock size={16} className="text-yellow-500/50 mb-2" />}
                     <div className={`transform scale-150 mb-2 ${p.color}`}>{p.icon}</div>
                     <span className="text-white font-bold">{p.name}</span>
                   </div>
@@ -471,9 +412,7 @@ export default function RoomView({ room, username, onBack }) {
           ) : (
             <div className="w-full max-w-sm mx-auto">
               <div className="flex items-center gap-2 mb-4 text-white">
-                <button onClick={() => setActiveSearchPlatform(null)}>
-                  <ArrowLeft />
-                </button>
+                <button onClick={() => setActiveSearchPlatform(null)}><ArrowLeft /></button>
                 <h2 className="text-xl font-bold">{activeSearchPlatform}</h2>
               </div>
               <div className="flex gap-2 mb-4">
@@ -485,22 +424,14 @@ export default function RoomView({ room, username, onBack }) {
                   onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                   autoFocus
                 />
-                <button
-                  onClick={handleSearch}
-                  className="bg-cyan-600 px-4 rounded-xl font-bold text-white"
-                >
+                <button onClick={handleSearch} className="bg-cyan-600 px-4 rounded-xl font-bold text-white">
                   {searchLoading ? '...' : 'ARA'}
                 </button>
               </div>
-              {/* YouTube Sonuçları */}
               {activeSearchPlatform === 'YouTube' && (
                 <div className="max-h-[50vh] overflow-y-auto space-y-2 pb-4">
                   {searchResults.map((vid, i) => (
-                    <div
-                      key={i}
-                      onClick={() => selectVideo(vid)}
-                      className="flex gap-3 p-2 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10"
-                    >
+                    <div key={i} onClick={() => selectVideo(vid)} className="flex gap-3 p-2 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10">
                       <img src={vid.thumbnail} className="w-24 h-16 object-cover rounded" alt="" />
                       <div className="flex-1 min-w-0">
                         <h4 className="text-white text-sm font-bold truncate">{vid.title}</h4>
@@ -508,11 +439,7 @@ export default function RoomView({ room, username, onBack }) {
                       </div>
                     </div>
                   ))}
-                  {searchLoading && searchResults.length === 0 && (
-                    <div className="text-center text-xs text-slate-500 py-4">
-                      YouTube aranıyor...
-                    </div>
-                  )}
+                  {searchLoading && searchResults.length === 0 && <div className="text-center text-xs text-slate-500 py-4">YouTube aranıyor...</div>}
                 </div>
               )}
             </div>
@@ -520,66 +447,36 @@ export default function RoomView({ room, username, onBack }) {
         </div>
       )}
 
-      {/* AYARLAR MODALI */}
+      {/* Settings Modal */}
       {showSettings && (
         <div className="absolute inset-0 z-[60] bg-black/80 flex items-center justify-center">
           <div className="bg-slate-900 w-80 p-6 rounded-3xl border border-white/10">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-white font-bold">Ses Dengesi</h3>
-              <button onClick={() => setShowSettings(false)}>
-                <X className="text-slate-400" />
-              </button>
+              <button onClick={() => setShowSettings(false)}><X className="text-slate-400" /></button>
             </div>
             <div className="flex items-center gap-4">
               <Volume2 className="text-cyan-400" />
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={volumeBalance}
-                onChange={(e) => setVolumeBalance(parseFloat(e.target.value))}
-                className="w-full"
-              />
+              <input type="range" min="0" max="1" step="0.05" value={volumeBalance} onChange={(e) => setVolumeBalance(parseFloat(e.target.value))} className="w-full" />
             </div>
           </div>
         </div>
       )}
 
-      {/* KULLANICI LİSTESİ MODALI */}
+      {/* User List Modal */}
       {showUserList && (
         <div className="absolute inset-y-0 right-0 z-[60] w-64 bg-slate-900 border-l border-white/10 shadow-2xl">
           <div className="flex justify-between items-center p-4 border-b border-white/10">
-            <h3 className="text-white font-bold">
-              Kullanıcılar ({currentRoom?.users?.length || 0})
-            </h3>
-            <button onClick={() => setShowUserList(false)}>
-              <X className="text-slate-400" />
-            </button>
+            <h3 className="text-white font-bold">Kullanıcılar ({currentRoom?.users?.length || 0})</h3>
+            <button onClick={() => setShowUserList(false)}><X className="text-slate-400" /></button>
           </div>
           <div className="p-4 space-y-4">
             {currentRoom?.users?.map((u, i) => (
               <div key={i} className="flex items-center gap-3">
-                <img
-                  src={u.avatar}
-                  className={`w-8 h-8 rounded-full ${
-                    u.id === currentRoom.hostId ? 'ring-2 ring-yellow-500' : ''
-                  }`}
-                  alt=""
-                />
+                <img src={u.avatar} className={`w-8 h-8 rounded-full ${u.id === currentRoom.hostId ? 'ring-2 ring-yellow-500' : ''}`} alt="" />
                 <div>
-                  <p
-                    className={`text-sm ${
-                      u.id === currentRoom.hostId ? 'text-yellow-500 font-bold' : 'text-white'
-                    }`}
-                  >
-                    {u.username}
-                  </p>
-                  {u.id === currentRoom.hostId && (
-                    <span className="text-[10px] bg-yellow-500/20 text-yellow-500 px-1 rounded">
-                      HOST
-                    </span>
-                  )}
+                  <p className={`text-sm ${u.id === currentRoom.hostId ? 'text-yellow-500 font-bold' : 'text-white'}`}>{u.username}</p>
+                  {u.id === currentRoom.hostId && <span className="text-[10px] bg-yellow-500/20 text-yellow-500 px-1 rounded">HOST</span>}
                 </div>
               </div>
             ))}
