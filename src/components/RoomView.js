@@ -5,7 +5,6 @@ import {
   MicOff,
   ArrowLeft,
   Search,
-  Send,
   Play,
   X,
   Settings,
@@ -40,6 +39,7 @@ export default function RoomView({ room, username, onBack }) {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [isMicVisualOn, setIsMicVisualOn] = useState(false);
 
   const [pendingSeek, setPendingSeek] = useState(null);
@@ -53,8 +53,17 @@ export default function RoomView({ room, username, onBack }) {
     return ['mp4', 'm3u8', 'mov', 'webm', 'ogv'].includes(extension);
   };
 
+  const isYoutubeUrl = (url) => {
+    if (!url) return false;
+    return url.includes('youtube.com') || url.includes('youtu.be');
+  };
+
+  // YouTube + mp4 vs Web ayrımı
   const shouldUseReactPlayer =
-    currentRoom.video?.platform === 'YouTube' || isDirectVideoFile(videoUrl);
+    isDirectVideoFile(videoUrl) ||
+    isYoutubeUrl(videoUrl) ||
+    currentRoom.video?.platform === 'YouTube';
+
   const isHost = currentRoom?.hostId === socket.id;
 
   useEffect(() => {
@@ -87,7 +96,9 @@ export default function RoomView({ room, username, onBack }) {
 
       const targetTime = typeof data.time === 'number' ? data.time : 0;
       const useRP =
-        data.platform === 'YouTube' || isDirectVideoFile(data.url || videoUrl);
+        isDirectVideoFile(data.url || videoUrl) ||
+        isYoutubeUrl(data.url || videoUrl) ||
+        data.platform === 'YouTube';
 
       if (useRP) {
         if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
@@ -110,7 +121,10 @@ export default function RoomView({ room, username, onBack }) {
       setMessages((prev) => [...prev, { ...msg, isMe: msg.senderId === socket.id }]);
     });
 
-    socket.on('search_results', (results) => setSearchResults(results));
+    socket.on('search_results', (results) => {
+      setSearchResults(results);
+      setSearchLoading(false);
+    });
 
     return () => {
       socket.off('room_data');
@@ -124,7 +138,7 @@ export default function RoomView({ room, username, onBack }) {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Host periyodik time ping (delay'i daha da azaltmak için)
+  // Host periyodik time ping (sync daha sıkı)
   useEffect(() => {
     if (!shouldUseReactPlayer) return;
     if (!isPlaying) return;
@@ -163,6 +177,7 @@ export default function RoomView({ room, username, onBack }) {
       const isVideo = isDirectVideoFile(url);
       selectVideo({ url, title: 'Web', platform: isVideo ? 'RawVideo' : 'Web' });
     } else {
+      setSearchLoading(true);
       socket.emit('search_youtube', searchQuery);
     }
   };
@@ -301,7 +316,6 @@ export default function RoomView({ room, username, onBack }) {
               config={{
                 youtube: {
                   playerVars: {
-                    origin: window.location.origin,
                     playsinline: 1,
                     showinfo: 0,
                     rel: 0,
@@ -319,6 +333,7 @@ export default function RoomView({ room, username, onBack }) {
             </div>
           )
         ) : videoUrl ? (
+          // WEB: buraya dokunmadım
           <iframe
             src={videoUrl}
             className="w-full h-full border-none bg-white"
@@ -415,22 +430,20 @@ export default function RoomView({ room, username, onBack }) {
       </div>
 
       {showPlatformModal && (
-        <div className="absolute inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6">
+        <div className="absolute inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col pt-16 pb-6 px-6 overflow-y-auto">
           <button
             onClick={() => {
               setShowPlatformModal(false);
               setActiveSearchPlatform(null);
             }}
-            className="absolute top-6 right-6 text-slate-400"
+            className="self-end mb-4 text-slate-400"
           >
             <X size={24} />
           </button>
 
           {!activeSearchPlatform ? (
-            <div className="w-full max-w-sm">
-              <h2 className="text-white text-xl font-bold text-center mb-6">
-                Ne izlemek istersin?
-              </h2>
+            <div className="w-full max-w-sm mx-auto">
+              <h2 className="text-white text-xl font-bold text-center mb-6">Ne izlemek istersin?</h2>
               <div className="grid grid-cols-2 gap-4">
                 {PLATFORMS.map((p) => (
                   <div
@@ -450,7 +463,7 @@ export default function RoomView({ room, username, onBack }) {
               </div>
             </div>
           ) : (
-            <div className="w-full max-w-sm">
+            <div className="w-full max-w-sm mx-auto">
               <div className="flex items-center gap-2 mb-4 text-white">
                 <button onClick={() => setActiveSearchPlatform(null)}>
                   <ArrowLeft />
@@ -472,11 +485,11 @@ export default function RoomView({ room, username, onBack }) {
                   onClick={handleSearch}
                   className="bg-cyan-600 px-4 rounded-xl font-bold text-white"
                 >
-                  ARA
+                  {searchLoading ? '...' : 'ARA'}
                 </button>
               </div>
               {activeSearchPlatform === 'YouTube' && (
-                <div className="max-h-[50vh] overflow-y-auto space-y-2">
+                <div className="max-h-[50vh] overflow-y-auto space-y-2 pb-4">
                   {searchResults.map((vid, i) => (
                     <div
                       key={i}
@@ -490,6 +503,11 @@ export default function RoomView({ room, username, onBack }) {
                       </div>
                     </div>
                   ))}
+                  {searchLoading && searchResults.length === 0 && (
+                    <div className="text-center text-xs text-slate-500 py-4">
+                      YouTube aranıyor...
+                    </div>
+                  )}
                 </div>
               )}
             </div>
