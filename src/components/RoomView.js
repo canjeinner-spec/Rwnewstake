@@ -1,6 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactPlayer from 'react-player';
-import { Mic, MicOff, ArrowLeft, Search, Send, Play, X, Settings, Users, Volume2, Globe, Sparkles, Lock } from 'lucide-react';
+import {
+  Mic,
+  MicOff,
+  ArrowLeft,
+  Search,
+  Send,
+  Play,
+  X,
+  Settings,
+  Users,
+  Volume2,
+  Globe,
+  Sparkles,
+  Lock
+} from 'lucide-react';
 import { socket } from '../services/socket';
 
 const PLATFORMS = [
@@ -12,8 +26,8 @@ const PLATFORMS = [
 
 export default function RoomView({ room, username, onBack }) {
   const [messages, setMessages] = useState([]);
-  const [inputText, setInputText] = useState("");
-  const [videoUrl, setVideoUrl] = useState(room.video?.url || "");
+  const [inputText, setInputText] = useState('');
+  const [videoUrl, setVideoUrl] = useState(room.video?.url || '');
   const [isPlaying, setIsPlaying] = useState(room.video?.isPlaying || false);
   const [volumeBalance, setVolumeBalance] = useState(0.2);
   const [currentRoom, setCurrentRoom] = useState(room);
@@ -24,7 +38,7 @@ export default function RoomView({ room, username, onBack }) {
   const [showPlatformModal, setShowPlatformModal] = useState(false);
   const [activeSearchPlatform, setActiveSearchPlatform] = useState(null);
 
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isMicVisualOn, setIsMicVisualOn] = useState(false);
 
@@ -39,7 +53,8 @@ export default function RoomView({ room, username, onBack }) {
     return ['mp4', 'm3u8', 'mov', 'webm', 'ogv'].includes(extension);
   };
 
-  const shouldUseReactPlayer = currentRoom.video?.platform === 'YouTube' || isDirectVideoFile(videoUrl);
+  const shouldUseReactPlayer =
+    currentRoom.video?.platform === 'YouTube' || isDirectVideoFile(videoUrl);
   const isHost = currentRoom?.hostId === socket.id;
 
   useEffect(() => {
@@ -58,7 +73,7 @@ export default function RoomView({ room, username, onBack }) {
       }
 
       if (data.platform) {
-        setCurrentRoom(prev => ({
+        setCurrentRoom((prev) => ({
           ...prev,
           video: {
             ...(prev.video || {}),
@@ -71,14 +86,15 @@ export default function RoomView({ room, username, onBack }) {
       setIsPlaying(data.isPlaying);
 
       const targetTime = typeof data.time === 'number' ? data.time : 0;
-      const useReactPlayer = data.platform === 'YouTube' || isDirectVideoFile(data.url || videoUrl);
+      const useRP =
+        data.platform === 'YouTube' || isDirectVideoFile(data.url || videoUrl);
 
-      if (useReactPlayer) {
+      if (useRP) {
         if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
           const current = playerRef.current.getCurrentTime();
           if (Number.isFinite(current)) {
             const diff = Math.abs(current - targetTime);
-            if (diff > 0.7) {
+            if (diff > 0.3) {
               playerRef.current.seekTo(targetTime, 'seconds');
             }
           } else {
@@ -91,7 +107,7 @@ export default function RoomView({ room, username, onBack }) {
     });
 
     socket.on('receive_message', (msg) => {
-      setMessages(prev => [...prev, { ...msg, isMe: msg.senderId === socket.id }]);
+      setMessages((prev) => [...prev, { ...msg, isMe: msg.senderId === socket.id }]);
     });
 
     socket.on('search_results', (results) => setSearchResults(results));
@@ -108,11 +124,33 @@ export default function RoomView({ room, username, onBack }) {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Host periyodik time ping (delay'i daha da azaltmak için)
+  useEffect(() => {
+    if (!shouldUseReactPlayer) return;
+    if (!isPlaying) return;
+    if (!isHost) return;
+    if (!playerRef.current) return;
+
+    const interval = setInterval(() => {
+      const t = playerRef.current?.getCurrentTime?.();
+      if (typeof t === 'number') {
+        socket.emit('video_change', {
+          roomId: room.id,
+          action: 'time',
+          time: t,
+          url: videoUrl
+        });
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isPlaying, isHost, shouldUseReactPlayer, videoUrl, room.id]);
+
   const handlePlatformClick = (p) => {
     if (p.status === 'soon') return;
     if (!isHost) return;
     setActiveSearchPlatform(p.name);
-    setSearchQuery("");
+    setSearchQuery('');
     setSearchResults([]);
   };
 
@@ -143,7 +181,7 @@ export default function RoomView({ room, username, onBack }) {
     });
 
     setSearchResults([]);
-    setSearchQuery("");
+    setSearchQuery('');
     setActiveSearchPlatform(null);
     setShowPlatformModal(false);
   };
@@ -157,7 +195,7 @@ export default function RoomView({ room, username, onBack }) {
       username,
       avatar: `https://ui-avatars.com/api/?name=${username}&background=random`
     });
-    setInputText("");
+    setInputText('');
   };
 
   const handlePlay = () => {
@@ -194,7 +232,6 @@ export default function RoomView({ room, username, onBack }) {
 
   return (
     <div className="flex flex-col h-[100dvh] bg-slate-950 relative overflow-hidden">
-
       {isCinemaMode && currentRoom.video?.thumbnail && (
         <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
           <div
@@ -206,7 +243,10 @@ export default function RoomView({ room, username, onBack }) {
       )}
 
       <div className="shrink-0 z-30 bg-gradient-to-b from-black/80 to-transparent pb-2 pt-4 px-4 flex items-center justify-between h-16 relative">
-        <button onClick={onBack} className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white">
+        <button
+          onClick={onBack}
+          className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white"
+        >
           <ArrowLeft size={20} />
         </button>
 
@@ -366,16 +406,10 @@ export default function RoomView({ room, username, onBack }) {
             onChange={(e) => setInputText(e.target.value)}
           />
         </form>
-        <button
-          onClick={() => setIsCinemaMode(!isCinemaMode)}
-          className="p-3 text-yellow-400"
-        >
+        <button onClick={() => setIsCinemaMode(!isCinemaMode)} className="p-3 text-yellow-400">
           <Sparkles size={20} />
         </button>
-        <button
-          onClick={() => setShowSettings(true)}
-          className="p-3 text-slate-400"
-        >
+        <button onClick={() => setShowSettings(true)} className="p-3 text-slate-400">
           <Settings size={20} />
         </button>
       </div>
@@ -426,7 +460,9 @@ export default function RoomView({ room, username, onBack }) {
               <div className="flex gap-2 mb-4">
                 <input
                   className="flex-1 bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-white text-sm"
-                  placeholder={activeSearchPlatform === 'YouTube' ? 'Video ara...' : 'https://...'}
+                  placeholder={
+                    activeSearchPlatform === 'YouTube' ? 'Video ara...' : 'https://...'
+                  }
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
@@ -488,7 +524,7 @@ export default function RoomView({ room, username, onBack }) {
 
       {showUserList && (
         <div className="absolute inset-y-0 right-0 z-[60] w-64 bg-slate-900 border-l border-white/10 shadow-2xl">
-          <div className="flex justify-between items-center p-4 border-b border:white/10">
+          <div className="flex justify-between items-center p-4 border-b border-white/10">
             <h3 className="text-white font-bold">
               Kullanıcılar ({currentRoom?.users?.length || 0})
             </h3>
