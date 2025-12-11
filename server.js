@@ -19,14 +19,25 @@ const io = new Server(server, {
 let rooms = {};
 
 const broadcastRoomList = () => {
-  const list = Object.values(rooms).map((r) => ({
-    id: r.id,
-    title: r.video.title || 'Yeni Oda',
-    platform: r.video.platform,
-    thumbnail: r.video.thumbnail || 'https://picsum.photos/300/200',
-    users: r.users.length,
-    avatars: r.users.map((u) => u.avatar)
-  }));
+  const list = Object.values(rooms).map((r) => {
+    const rawTitle = r.video.title || 'Yeni Oda';
+    const looksLikeUrl = typeof rawTitle === 'string' && /^https?:\/\//i.test(rawTitle);
+
+    let safeTitle = rawTitle;
+    if (looksLikeUrl) {
+      safeTitle = r.video.platform === 'Web' ? 'Web' : 'Video';
+    }
+
+    return {
+      id: r.id,
+      title: safeTitle,
+      platform: r.video.platform,
+      thumbnail: r.video.thumbnail || 'https://picsum.photos/300/200',
+      users: r.users.length,
+      avatars: r.users.map((u) => u.avatar)
+    };
+  });
+
   io.emit('room_list_update', list);
 };
 
@@ -84,8 +95,6 @@ io.on('connection', (socket) => {
 
     io.to(roomId).emit('room_data', room);
 
-    const isHost = room.hostId === socket.id;
-
     const now = Date.now();
     let currentTime = room.video.time;
 
@@ -95,7 +104,7 @@ io.on('connection', (socket) => {
 
     io.to(socket.id).emit('sync_video', {
       ...room.video,
-      isPlaying: isHost ? room.video.isPlaying : false,
+      isPlaying: room.video.isPlaying,
       action: 'load',
       time: currentTime
     });
@@ -121,9 +130,25 @@ io.on('connection', (socket) => {
       room.video.isPlaying = true;
       room.video.lastUpdate = now;
 
-      io.to(data.roomId).emit('sync_video', { ...room.video, action: 'load', time: room.video.time });
+      io.to(data.roomId).emit('sync_video', {
+        ...room.video,
+        action: 'load',
+        time: room.video.time
+      });
       io.to(data.roomId).emit('room_data', room);
       broadcastRoomList();
+      return;
+    }
+
+    if (data.action === 'time') {
+      room.video.time = data.time || room.video.time || 0;
+      room.video.lastUpdate = now;
+
+      socket.to(data.roomId).emit('sync_video', {
+        ...room.video,
+        action: 'time',
+        time: room.video.time
+      });
       return;
     }
 
