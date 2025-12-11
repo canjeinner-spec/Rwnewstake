@@ -58,7 +58,6 @@ export default function RoomView({ room, username, onBack }) {
     return url.includes('youtube.com') || url.includes('youtu.be');
   };
 
-  // YouTube + mp4 vs Web ayrımı
   const shouldUseReactPlayer =
     isDirectVideoFile(videoUrl) ||
     isYoutubeUrl(videoUrl) ||
@@ -95,9 +94,10 @@ export default function RoomView({ room, username, onBack }) {
       setIsPlaying(data.isPlaying);
 
       const targetTime = typeof data.time === 'number' ? data.time : 0;
+      const urlToCheck = data.url || videoUrl;
       const useRP =
-        isDirectVideoFile(data.url || videoUrl) ||
-        isYoutubeUrl(data.url || videoUrl) ||
+        isDirectVideoFile(urlToCheck) ||
+        isYoutubeUrl(urlToCheck) ||
         data.platform === 'YouTube';
 
       if (useRP) {
@@ -138,7 +138,6 @@ export default function RoomView({ room, username, onBack }) {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Host periyodik time ping (sync daha sıkı)
   useEffect(() => {
     if (!shouldUseReactPlayer) return;
     if (!isPlaying) return;
@@ -159,6 +158,26 @@ export default function RoomView({ room, username, onBack }) {
 
     return () => clearInterval(interval);
   }, [isPlaying, isHost, shouldUseReactPlayer, videoUrl, room.id]);
+
+  useEffect(() => {
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') {
+        socket.emit('resync_video', { roomId: room.id });
+      }
+    };
+
+    const handlePageShow = () => {
+      socket.emit('resync_video', { roomId: room.id });
+    };
+
+    document.addEventListener('visibilitychange', handleVisible);
+    window.addEventListener('pageshow', handlePageShow);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.removeEventListener('pageshow', handlePageShow);
+    };
+  }, [room.id]);
 
   const handlePlatformClick = (p) => {
     if (p.status === 'soon') return;
@@ -333,7 +352,6 @@ export default function RoomView({ room, username, onBack }) {
             </div>
           )
         ) : videoUrl ? (
-          // WEB: buraya dokunmadım
           <iframe
             src={videoUrl}
             className="w-full h-full border-none bg-white"
@@ -473,9 +491,7 @@ export default function RoomView({ room, username, onBack }) {
               <div className="flex gap-2 mb-4">
                 <input
                   className="flex-1 bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-white text-sm"
-                  placeholder={
-                    activeSearchPlatform === 'YouTube' ? 'Video ara...' : 'https://...'
-                  }
+                  placeholder={activeSearchPlatform === 'YouTube' ? 'Video ara...' : 'https://...'}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
