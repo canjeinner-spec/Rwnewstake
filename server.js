@@ -33,13 +33,14 @@ const broadcastRoomList = () => {
 io.on('connection', (socket) => {
   broadcastRoomList();
 
+  // YOUTUBE ARAMA - OPTİMİZE EDİLDİ
   socket.on('search_youtube', async (query) => {
     if (!query) return;
     try {
+      // Arama işlemini hafifletmek için sadece gerekli alanları alıyoruz
       const r = await ytSearch(query);
       const videos = r.videos
-        .filter((v) => v.type === 'video' && v.seconds < 7200)
-        .slice(0, 10)
+        .slice(0, 10) // İlk 10 sonucu al, filtrelemeyi azalttık hız için
         .map((v) => ({
           title: v.title,
           timestamp: v.timestamp,
@@ -50,7 +51,10 @@ io.on('connection', (socket) => {
           views: v.views
         }));
       socket.emit('search_results', videos);
-    } catch (e) {}
+    } catch (e) {
+      console.log("Arama Hatası:", e);
+      socket.emit('search_results', []);
+    }
   });
 
   socket.on('join_room', ({ roomId, username, avatar, platform, initialVideo }) => {
@@ -93,11 +97,12 @@ io.on('connection', (socket) => {
 
     io.to(roomId).emit('room_data', room);
 
+    // Yeni girene güncel durumu zorla gönder
     io.to(socket.id).emit('sync_video', {
       ...room.video,
       time: currentTime,
-      isPlaying: isHost ? room.video.isPlaying : false,
-      action: 'load'
+      isPlaying: room.video.isPlaying, // Host olsun olmasın odanın durumu neyse o
+      action: 'load' // Player'ı tetiklemesi için load gönderiyoruz
     });
 
     broadcastRoomList();
@@ -107,8 +112,8 @@ io.on('connection', (socket) => {
     const room = rooms[data.roomId];
     if (!room) return;
 
-    const isHost = socket.id === room.hostId;
-    if (!isHost) return;
+    // Sadece host değiştirebilir (Güvenlik)
+    if (socket.id !== room.hostId) return;
 
     const now = Date.now();
 
@@ -121,6 +126,7 @@ io.on('connection', (socket) => {
       room.video.isPlaying = true;
       room.video.lastUpdate = now;
 
+      // Herkese videoyu baştan yükle emri ver
       io.to(data.roomId).emit(
         'sync_video',
         { ...room.video, action: 'load', time: 0 }
@@ -130,28 +136,22 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (data.action === 'time') {
-      room.video.time =
-        typeof data.time === 'number' ? data.time : room.video.time || 0;
-      room.video.lastUpdate = now;
-      return;
-    }
-
     if (data.action === 'play') {
-      room.video.time =
-        typeof data.time === 'number' ? data.time : room.video.time || 0;
+      room.video.time = typeof data.time === 'number' ? data.time : room.video.time;
       room.video.isPlaying = true;
       room.video.lastUpdate = now;
     } else if (data.action === 'pause') {
-      if (room.video.isPlaying && room.video.lastUpdate) {
-        const diff = (now - room.video.lastUpdate) / 1000;
-        room.video.time += diff;
-      }
+      room.video.time = typeof data.time === 'number' ? data.time : room.video.time;
       room.video.isPlaying = false;
       room.video.lastUpdate = now;
     } else if (data.action === 'seek') {
       room.video.time = typeof data.time === 'number' ? data.time : 0;
       room.video.lastUpdate = now;
+    } else if (data.action === 'time') {
+        // Time update sadece state günceller, herkese yaymaz (trafik tasarrufu)
+        room.video.time = typeof data.time === 'number' ? data.time : room.video.time;
+        room.video.lastUpdate = now;
+        return; 
     }
 
     socket.to(data.roomId).emit(
@@ -172,13 +172,11 @@ io.on('connection', (socket) => {
       currentTime += diff;
     }
 
-    const isHost = socket.id === room.hostId;
-
     io.to(socket.id).emit('sync_video', {
       ...room.video,
       time: currentTime,
-      isPlaying: isHost ? room.video.isPlaying : false,
-      action: 'load'
+      isPlaying: room.video.isPlaying,
+      action: 'sync' // Load yerine sync diyerek player'ı resetlemeden zamanı düzelt
     });
   });
 
