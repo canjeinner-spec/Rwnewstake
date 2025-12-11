@@ -24,6 +24,7 @@ const PLATFORMS = [
 ];
 
 export default function RoomView({ room, username, onBack }) {
+  // --- STATE TANIMLARI ---
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [videoUrl, setVideoUrl] = useState(room.video?.url || '');
@@ -32,21 +33,27 @@ export default function RoomView({ room, username, onBack }) {
   const [currentRoom, setCurrentRoom] = useState(room);
   const [isCinemaMode, setIsCinemaMode] = useState(true);
 
+  // UI Modalları
   const [showUserList, setShowUserList] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showPlatformModal, setShowPlatformModal] = useState(false);
   const [activeSearchPlatform, setActiveSearchPlatform] = useState(null);
 
+  // Arama
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  
+  // Mikrofon (Sadece Görsel)
   const [isMicVisualOn, setIsMicVisualOn] = useState(false);
 
+  // Safari/Mobil Senkronizasyon için bekleyen seek işlemi
   const [pendingSeek, setPendingSeek] = useState(null);
 
   const chatEndRef = useRef(null);
   const playerRef = useRef(null);
 
+  // --- YARDIMCI FONKSİYONLAR ---
   const isDirectVideoFile = (url) => {
     if (!url) return false;
     const extension = url.split('.').pop().split('?')[0].toLowerCase();
@@ -65,6 +72,7 @@ export default function RoomView({ room, username, onBack }) {
 
   const isHost = currentRoom?.hostId === socket.id;
 
+  // --- SOCKET LISTENERS ---
   useEffect(() => {
     socket.emit('join_room', {
       roomId: room.id,
@@ -76,10 +84,12 @@ export default function RoomView({ room, username, onBack }) {
     socket.on('room_data', (updatedRoom) => setCurrentRoom(updatedRoom));
 
     socket.on('sync_video', (data) => {
+      // 1. URL Güncelleme
       if (data.url && data.url !== videoUrl) {
         setVideoUrl(data.url);
       }
 
+      // 2. Platform Güncelleme
       if (data.platform) {
         setCurrentRoom((prev) => ({
           ...prev,
@@ -91,27 +101,21 @@ export default function RoomView({ room, username, onBack }) {
         }));
       }
 
+      // 3. Oynatma Durumu
       setIsPlaying(data.isPlaying);
 
+      // 4. Zaman Senkronizasyonu (Sadece ReactPlayer için)
       const targetTime = typeof data.time === 'number' ? data.time : 0;
-      const urlToCheck = data.url || videoUrl;
-      const useRP =
-        isDirectVideoFile(urlToCheck) ||
-        isYoutubeUrl(urlToCheck) ||
-        data.platform === 'YouTube';
-
-      if (useRP) {
+      
+      if (shouldUseReactPlayer) {
         if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
           const current = playerRef.current.getCurrentTime();
-          if (Number.isFinite(current)) {
-            const diff = Math.abs(current - targetTime);
-            if (diff > 0.3) {
-              playerRef.current.seekTo(targetTime, 'seconds');
-            }
-          } else {
-            setPendingSeek(targetTime);
+          // Eğer player hazırsa ve fark büyükse atla
+          if (Number.isFinite(current) && Math.abs(current - targetTime) > 1) {
+            playerRef.current.seekTo(targetTime, 'seconds');
           }
         } else {
+          // Player henüz hazır değilse, hazır olunca atlaması için kaydet
           setPendingSeek(targetTime);
         }
       }
@@ -132,17 +136,16 @@ export default function RoomView({ room, username, onBack }) {
       socket.off('receive_message');
       socket.off('search_results');
     };
-  }, [username, room.id, videoUrl]);
+  }, [username, room.id, videoUrl, shouldUseReactPlayer]);
 
+  // Chat Scroll
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // --- HOST ZAMAN GÜNCELLEMESİ ---
   useEffect(() => {
-    if (!shouldUseReactPlayer) return;
-    if (!isPlaying) return;
-    if (!isHost) return;
-    if (!playerRef.current) return;
+    if (!shouldUseReactPlayer || !isPlaying || !isHost || !playerRef.current) return;
 
     const interval = setInterval(() => {
       const t = playerRef.current?.getCurrentTime?.();
@@ -154,31 +157,23 @@ export default function RoomView({ room, username, onBack }) {
           url: videoUrl
         });
       }
-    }, 1000);
+    }, 2000); // Her 2 saniyede bir senkronize et
 
     return () => clearInterval(interval);
   }, [isPlaying, isHost, shouldUseReactPlayer, videoUrl, room.id]);
 
+  // --- SAFARI / MOBİL BACKGROUND FIX ---
   useEffect(() => {
     const handleVisible = () => {
       if (document.visibilityState === 'visible') {
         socket.emit('resync_video', { roomId: room.id });
       }
     };
-
-    const handlePageShow = () => {
-      socket.emit('resync_video', { roomId: room.id });
-    };
-
     document.addEventListener('visibilitychange', handleVisible);
-    window.addEventListener('pageshow', handlePageShow);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisible);
-      window.removeEventListener('pageshow', handlePageShow);
-    };
+    return () => document.removeEventListener('visibilitychange', handleVisible);
   }, [room.id]);
 
+  // --- HANDLERS ---
   const handlePlatformClick = (p) => {
     if (p.status === 'soon') return;
     if (!isHost) return;
@@ -193,6 +188,7 @@ export default function RoomView({ room, username, onBack }) {
     if (activeSearchPlatform === 'Web') {
       let url = searchQuery;
       if (!url.startsWith('http')) url = `https://${url}`;
+      // Video dosyası mı yoksa site mi kontrol et
       const isVideo = isDirectVideoFile(url);
       selectVideo({ url, title: 'Web', platform: isVideo ? 'RawVideo' : 'Web' });
     } else {
@@ -232,40 +228,28 @@ export default function RoomView({ room, username, onBack }) {
     setInputText('');
   };
 
+  // Player Events
   const handlePlay = () => {
     if (!isHost) return;
     setIsPlaying(true);
-    socket.emit('video_change', {
-      roomId: room.id,
-      action: 'play',
-      time: playerRef.current?.getCurrentTime() || 0,
-      url: videoUrl
-    });
+    socket.emit('video_change', { roomId: room.id, action: 'play', time: playerRef.current?.getCurrentTime() || 0, url: videoUrl });
   };
 
   const handlePause = () => {
     if (!isHost) return;
     setIsPlaying(false);
-    socket.emit('video_change', {
-      roomId: room.id,
-      action: 'pause',
-      time: playerRef.current?.getCurrentTime() || 0,
-      url: videoUrl
-    });
+    socket.emit('video_change', { roomId: room.id, action: 'pause', time: playerRef.current?.getCurrentTime() || 0, url: videoUrl });
   };
 
-  const handleSeek = (newTime) => {
+  const handleSeek = (seconds) => {
     if (!isHost) return;
-    socket.emit('video_change', {
-      roomId: room.id,
-      action: 'seek',
-      time: newTime,
-      url: videoUrl
-    });
+    socket.emit('video_change', { roomId: room.id, action: 'seek', time: seconds, url: videoUrl });
   };
 
   return (
     <div className="flex flex-col h-[100dvh] bg-slate-950 relative overflow-hidden">
+      
+      {/* SİNEMA MODU (AMBILIGHT) */}
       {isCinemaMode && currentRoom.video?.thumbnail && (
         <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
           <div
@@ -276,11 +260,9 @@ export default function RoomView({ room, username, onBack }) {
         </div>
       )}
 
+      {/* HEADER */}
       <div className="shrink-0 z-30 bg-gradient-to-b from-black/80 to-transparent pb-2 pt-4 px-4 flex items-center justify-between h-16 relative">
-        <button
-          onClick={onBack}
-          className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white"
-        >
+        <button onClick={onBack} className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white">
           <ArrowLeft size={20} />
         </button>
 
@@ -310,11 +292,12 @@ export default function RoomView({ room, username, onBack }) {
         </div>
       </div>
 
+      {/* PLAYER ALANI */}
       <div className="w-full aspect-video bg-black relative shrink-0 z-10 border-b border-white/5">
         {shouldUseReactPlayer ? (
           videoUrl ? (
             <ReactPlayer
-              key={videoUrl}
+              key={videoUrl} // URL değişince player'ı resetle (Siyah ekran fix)
               ref={playerRef}
               url={videoUrl}
               width="100%"
@@ -324,8 +307,9 @@ export default function RoomView({ room, username, onBack }) {
               onPlay={isHost ? handlePlay : undefined}
               onPause={isHost ? handlePause : undefined}
               onSeek={isHost ? handleSeek : undefined}
+              // Player hazır olduğunda bekleyen seek işlemini yap (Safari fix)
               onReady={() => {
-                if (pendingSeek != null && playerRef.current) {
+                if (pendingSeek !== null && playerRef.current) {
                   playerRef.current.seekTo(pendingSeek, 'seconds');
                   setPendingSeek(null);
                 }
@@ -338,7 +322,8 @@ export default function RoomView({ room, username, onBack }) {
                     playsinline: 1,
                     showinfo: 0,
                     rel: 0,
-                    modestbranding: 1
+                    modestbranding: 1,
+                    origin: window.location.origin
                   }
                 },
                 file: {
@@ -365,6 +350,7 @@ export default function RoomView({ room, username, onBack }) {
         )}
       </div>
 
+      {/* CHAT LISTESİ */}
       <div className="flex-1 relative flex flex-col min-h-0 z-10">
         <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-3 flex flex-col justify-end">
           {messages.map((msg, i) => {
@@ -419,6 +405,7 @@ export default function RoomView({ room, username, onBack }) {
         </div>
       </div>
 
+      {/* ALT KONTROL BAR */}
       <div className="shrink-0 bg-slate-900/80 backdrop-blur-xl border-t border-white/5 p-3 flex items-center gap-3 pb-safe-area">
         <button
           onClick={() => setIsMicVisualOn(!isMicVisualOn)}
@@ -447,6 +434,7 @@ export default function RoomView({ room, username, onBack }) {
         </button>
       </div>
 
+      {/* PLATFORM SEÇME MODALI (GRID) */}
       {showPlatformModal && (
         <div className="absolute inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col pt-16 pb-6 px-6 overflow-y-auto">
           <button
@@ -504,6 +492,7 @@ export default function RoomView({ room, username, onBack }) {
                   {searchLoading ? '...' : 'ARA'}
                 </button>
               </div>
+              {/* YouTube Sonuçları */}
               {activeSearchPlatform === 'YouTube' && (
                 <div className="max-h-[50vh] overflow-y-auto space-y-2 pb-4">
                   {searchResults.map((vid, i) => (
@@ -531,6 +520,7 @@ export default function RoomView({ room, username, onBack }) {
         </div>
       )}
 
+      {/* AYARLAR MODALI */}
       {showSettings && (
         <div className="absolute inset-0 z-[60] bg-black/80 flex items-center justify-center">
           <div className="bg-slate-900 w-80 p-6 rounded-3xl border border-white/10">
@@ -556,6 +546,7 @@ export default function RoomView({ room, username, onBack }) {
         </div>
       )}
 
+      {/* KULLANICI LİSTESİ MODALI */}
       {showUserList && (
         <div className="absolute inset-y-0 right-0 z-[60] w-64 bg-slate-900 border-l border-white/10 shadow-2xl">
           <div className="flex justify-between items-center p-4 border-b border-white/10">
