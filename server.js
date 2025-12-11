@@ -19,25 +19,14 @@ const io = new Server(server, {
 let rooms = {};
 
 const broadcastRoomList = () => {
-  const list = Object.values(rooms).map((r) => {
-    const rawTitle = r.video.title || 'Yeni Oda';
-    const looksLikeUrl = typeof rawTitle === 'string' && /^https?:\/\//i.test(rawTitle);
-
-    let safeTitle = rawTitle;
-    if (looksLikeUrl) {
-      safeTitle = r.video.platform === 'Web' ? 'Web' : 'Video';
-    }
-
-    return {
-      id: r.id,
-      title: safeTitle,
-      platform: r.video.platform,
-      thumbnail: r.video.thumbnail || 'https://picsum.photos/300/200',
-      users: r.users.length,
-      avatars: r.users.map((u) => u.avatar)
-    };
-  });
-
+  const list = Object.values(rooms).map((r) => ({
+    id: r.id,
+    title: r.video.title || 'Yeni Oda',
+    platform: r.video.platform,
+    thumbnail: r.video.thumbnail || 'https://picsum.photos/300/200',
+    users: r.users.length,
+    avatars: r.users.map((u) => u.avatar)
+  }));
   io.emit('room_list_update', list);
 };
 
@@ -79,7 +68,7 @@ io.on('connection', (socket) => {
           thumbnail: initialVideo?.thumbnail || '',
           isPlaying: false,
           time: 0,
-          lastUpdate: null
+          lastUpdate: Date.now()
         }
       };
     }
@@ -93,20 +82,22 @@ io.on('connection', (socket) => {
       room.users.push({ id: socket.id, username, avatar });
     }
 
-    io.to(roomId).emit('room_data', room);
-
     const now = Date.now();
-    let currentTime = room.video.time;
-
+    let currentTime = room.video.time || 0;
     if (room.video.isPlaying && room.video.lastUpdate) {
-      currentTime += (now - room.video.lastUpdate) / 1000;
+      const diff = (now - room.video.lastUpdate) / 1000;
+      currentTime += diff;
     }
+
+    const isHost = room.hostId === socket.id;
+
+    io.to(roomId).emit('room_data', room);
 
     io.to(socket.id).emit('sync_video', {
       ...room.video,
-      isPlaying: room.video.isPlaying,
-      action: 'load',
-      time: currentTime
+      time: currentTime,
+      isPlaying: isHost ? room.video.isPlaying : false,
+      action: 'load'
     });
 
     broadcastRoomList();
@@ -130,30 +121,25 @@ io.on('connection', (socket) => {
       room.video.isPlaying = true;
       room.video.lastUpdate = now;
 
-      io.to(data.roomId).emit('sync_video', {
-        ...room.video,
-        action: 'load',
-        time: room.video.time
-      });
+      io.to(data.roomId).emit(
+        'sync_video',
+        { ...room.video, action: 'load', time: 0 }
+      );
       io.to(data.roomId).emit('room_data', room);
       broadcastRoomList();
       return;
     }
 
     if (data.action === 'time') {
-      room.video.time = data.time || room.video.time || 0;
+      room.video.time =
+        typeof data.time === 'number' ? data.time : room.video.time || 0;
       room.video.lastUpdate = now;
-
-      socket.to(data.roomId).emit('sync_video', {
-        ...room.video,
-        action: 'time',
-        time: room.video.time
-      });
       return;
     }
 
     if (data.action === 'play') {
-      room.video.time = data.time || room.video.time || 0;
+      room.video.time =
+        typeof data.time === 'number' ? data.time : room.video.time || 0;
       room.video.isPlaying = true;
       room.video.lastUpdate = now;
     } else if (data.action === 'pause') {
@@ -164,14 +150,35 @@ io.on('connection', (socket) => {
       room.video.isPlaying = false;
       room.video.lastUpdate = now;
     } else if (data.action === 'seek') {
-      room.video.time = data.time || 0;
+      room.video.time = typeof data.time === 'number' ? data.time : 0;
       room.video.lastUpdate = now;
     }
 
-    socket.to(data.roomId).emit('sync_video', {
+    socket.to(data.roomId).emit(
+      'sync_video',
+      { ...room.video, action: data.action }
+    );
+  });
+
+  socket.on('resync_video', ({ roomId }) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    const now = Date.now();
+    let currentTime = room.video.time || 0;
+
+    if (room.video.isPlaying && room.video.lastUpdate) {
+      const diff = (now - room.video.lastUpdate) / 1000;
+      currentTime += diff;
+    }
+
+    const isHost = socket.id === room.hostId;
+
+    io.to(socket.id).emit('sync_video', {
       ...room.video,
-      action: data.action,
-      time: room.video.time
+      time: currentTime,
+      isPlaying: isHost ? room.video.isPlaying : false,
+      action: 'load'
     });
   });
 
