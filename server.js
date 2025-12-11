@@ -1,6 +1,6 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require("socket.io");
+const { Server } = require('socket.io');
 const path = require('path');
 const cors = require('cors');
 const ytSearch = require('yt-search');
@@ -11,7 +11,7 @@ const server = http.createServer(app);
 app.use(cors());
 
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
+  cors: { origin: '*', methods: ['GET', 'POST'] },
   pingTimeout: 60000,
   pingInterval: 25000
 });
@@ -19,19 +19,18 @@ const io = new Server(server, {
 let rooms = {};
 
 const broadcastRoomList = () => {
-  const list = Object.values(rooms).map(r => ({
+  const list = Object.values(rooms).map((r) => ({
     id: r.id,
-    title: r.video.title || "Yeni Oda",
+    title: r.video.title || 'Yeni Oda',
     platform: r.video.platform,
-    thumbnail: r.video.thumbnail || "https://picsum.photos/300/200",
+    thumbnail: r.video.thumbnail || 'https://picsum.photos/300/200',
     users: r.users.length,
-    avatars: r.users.map(u => u.avatar)
+    avatars: r.users.map((u) => u.avatar)
   }));
   io.emit('room_list_update', list);
 };
 
 io.on('connection', (socket) => {
-
   broadcastRoomList();
 
   socket.on('search_youtube', async (query) => {
@@ -39,9 +38,9 @@ io.on('connection', (socket) => {
     try {
       const r = await ytSearch(query);
       const videos = r.videos
-        .filter(v => v.type === 'video' && v.seconds < 7200)
+        .filter((v) => v.type === 'video' && v.seconds < 7200)
         .slice(0, 10)
-        .map(v => ({
+        .map((v) => ({
           title: v.title,
           timestamp: v.timestamp,
           thumbnail: v.thumbnail,
@@ -68,14 +67,15 @@ io.on('connection', (socket) => {
           title: initialVideo?.title || 'Oda',
           thumbnail: initialVideo?.thumbnail || '',
           isPlaying: false,
-          time: 0
+          time: 0,
+          lastUpdate: null
         }
       };
     }
 
     const room = rooms[roomId];
 
-    const idx = room.users.findIndex(u => u.id === socket.id);
+    const idx = room.users.findIndex((u) => u.id === socket.id);
     if (idx !== -1) {
       room.users[idx] = { id: socket.id, username, avatar };
     } else {
@@ -86,11 +86,18 @@ io.on('connection', (socket) => {
 
     const isHost = room.hostId === socket.id;
 
+    const now = Date.now();
+    let currentTime = room.video.time;
+
+    if (room.video.isPlaying && room.video.lastUpdate) {
+      currentTime += (now - room.video.lastUpdate) / 1000;
+    }
+
     io.to(socket.id).emit('sync_video', {
       ...room.video,
       isPlaying: isHost ? room.video.isPlaying : false,
       action: 'load',
-      time: room.video.time
+      time: currentTime
     });
 
     broadcastRoomList();
@@ -100,10 +107,10 @@ io.on('connection', (socket) => {
     const room = rooms[data.roomId];
     if (!room) return;
 
-    if (data.action === 'time') {
-      room.video.time = data.time;
-      return;
-    }
+    const isHost = socket.id === room.hostId;
+    if (!isHost) return;
+
+    const now = Date.now();
 
     if (data.action === 'load') {
       room.video.url = data.url;
@@ -112,17 +119,35 @@ io.on('connection', (socket) => {
       room.video.platform = data.platform || room.video.platform;
       room.video.time = 0;
       room.video.isPlaying = true;
+      room.video.lastUpdate = now;
 
-      io.to(data.roomId).emit('sync_video', { ...room.video, action: 'load' });
+      io.to(data.roomId).emit('sync_video', { ...room.video, action: 'load', time: room.video.time });
       io.to(data.roomId).emit('room_data', room);
       broadcastRoomList();
       return;
     }
 
-    room.video.time = data.time;
-    room.video.isPlaying = data.action === 'play';
+    if (data.action === 'play') {
+      room.video.time = data.time || room.video.time || 0;
+      room.video.isPlaying = true;
+      room.video.lastUpdate = now;
+    } else if (data.action === 'pause') {
+      if (room.video.isPlaying && room.video.lastUpdate) {
+        const diff = (now - room.video.lastUpdate) / 1000;
+        room.video.time += diff;
+      }
+      room.video.isPlaying = false;
+      room.video.lastUpdate = now;
+    } else if (data.action === 'seek') {
+      room.video.time = data.time || 0;
+      room.video.lastUpdate = now;
+    }
 
-    socket.to(data.roomId).emit('sync_video', { ...room.video, action: data.action });
+    socket.to(data.roomId).emit('sync_video', {
+      ...room.video,
+      action: data.action,
+      time: room.video.time
+    });
   });
 
   socket.on('send_message', ({ roomId, message, username, avatar }) => {
@@ -138,7 +163,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     for (const roomId in rooms) {
       const room = rooms[roomId];
-      const idx = room.users.findIndex(u => u.id === socket.id);
+      const idx = room.users.findIndex((u) => u.id === socket.id);
       if (idx !== -1) {
         const left = room.users[idx];
         room.users.splice(idx, 1);
